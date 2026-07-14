@@ -14,6 +14,8 @@
   - 例外：**定範圍時**可用 `query=True` 二分探點找水位邊界 (只看 `list_date`/`aid`/url 的 epoch)，省 token。正式判定一律非 query。
 - 增量巡邏用**時間水位** (`last_time` + `last_aid`)，不用 index 當界標 (刪文會讓 index 位移)。
 - **要罰人之前，先讀板規原文**。`records` 裡的 `rules` 是摘要，**摘要不足以當處置依據**。凡是要援引條款刪文/水桶/寫進報告，先 `get_post(board, aid=<板規置底文aid>)` 讀原文對照。摘要會漏掉例外、允許格式與罰則刻度 → 會同時造成「該罰的沒罰」與「不該罰的罰了」。
+- **判舊案要讀「行為當時生效」的板規版本，不是現行版**。板規會改版，罰則會變、例外條款會被刪。處理陳年檢舉/申訴時，先確認事發日期落在哪一版，再去讀那一版的原文 (版本紀錄在板規文末；`rules_source` 有留前版 aid)。
+  **實例 (2026/07/14 踩到，且信已寄出才發現)**：判 06/04 的一元賣場爭議時，只讀了現行 v1.45，看到 2-7 是新增條文就推論「舊板規沒規定」，兩封信都寫了「當時無明文，不予處罰」。實際上 2021 年的 v1.431 早有 2-2「未詳述一元賣場與手續費 → 依 2-3 處置」+ 2-3「需最低標金須強調會匯回，無強調者違規 (禁言90天)」。**該罰的說成沒得罰，只好再發更正信**。從新從輕可以，但要知道自己在從輕。
 - **判例(`precedents`)可能有錯**。它是滾動彙總，錯的判例會讓後續巡邏「越判越一致地錯」。發現誤判要立刻回頭改判例 (見〈誤判的處理〉)。
 - PTT 同帳號單一連線，巡邏期間別開其它 PTT session。
 
@@ -31,6 +33,7 @@
     {"due": "YYYY/MM/DD", "what": "到期事項(如板規試行期滿需定稿)", "detail": "到期要做什麼、草稿在哪", "status": "待辦/進行中"}
   ],
   "watermark": {"last_index": 80116, "last_time": "Thu Jul  2 22:48:33 2026", "last_aid": "1gHdf3A2"},
+  "inbox_watermark": {"last_mail_index": 318, "checked_at": "YYYY/MM/DD", "note": "已讀到第幾封信;板友來信是否都有下落"},
   "precedents": {
     "updated_at": "2026/07/02",
     "rulings": [
@@ -70,7 +73,7 @@
 
 ## 巡邏步驟
 
-1. **讀紀錄** `records/<板名>.json`：取 `watermark`、`rules`、`moderators`、`precedents`、`watch_list`。不存在就新建 (watermark 視為空、precedents 與 watch_list 視為空)。
+1. **讀紀錄** `records/<板名>.json`：取 `watermark`、`inbox_watermark`、`rules`、`moderators`、`precedents`、`watch_list`、`pending_actions`。不存在就新建 (各水位視為空)。
 2. **登入並確認板主身分** `mcp__PTT__login()` (無參數)。失敗就停、回報。登入帳號即註冊 MCP 用的 `PTT_ID` (不確定就問使用者)。**先對照該板 `moderators`** (紀錄檔已存就直接用；否則呼叫 `get_board_info(board)` 取得) 確認登入帳號在名單內：
    - 在名單 → 可在授權後執行處置。
    - 不在名單 → **只產報告、全程不做任何寫入** (刪文/推文/水桶/發文都不做)，並在報告註明「登入帳號非本板板主，僅供板主參考」。
@@ -106,6 +109,13 @@
 9. **更新紀錄**：`watermark` 更新為**最新一篇存活文**的 `last_time/last_aid` (`last_index` 記其 index)；若 index=N 那篇已自刪 (`post_status` 非 `EXISTS`、無 time/aid)，往回取第一篇存活文。本次 scan append 到 `scans` 最前面。
    **更新 `precedents`**：本次每筆違規歸入對應 `rulings[].pattern` → `count += 1`、補進 `examples`(留最新幾個即可)；新型違規新增一筆 ruling。反覆出現或處於灰色地帶者，加/更新 `rule_revision_candidates`。
    **更新 `watch_list`**：本次凡送出站內信/正式警告者，新增或更新一筆 (含 `warned_at`/`reason`/`escalation`)；本次有核對到的舊名單更新 `last_checked`/`status`。寫回檔案。
+10. **清信箱 (板面巡完後必做，不可省)**：板友的**檢舉信與交易爭議信只會寄到信箱，不會出現在板面**。只巡板面 = 這些信永遠沉底。
+    - `get_newest_index(index_type="MAIL")` → `M`。從 `M` 往回逐封 `get_mail(index=i)`，讀到 `inbox_watermark` 記的編號為止。
+    - ⚠️ **信箱的 `search_list` 搜尋是壞的**：拿確實寄過信的 ID 去 `[["AUTHOR", id]]` 搜也回 `0`。**只能逐封讀，不能靠搜尋**。信箱編號是時間序，可先探點 (讀 index M/2 看日期) 決定往回掃多少。
+    - 信箱裡多數是**板主自己寄出的備份**，跳過。要處理的是**板友寄來**的：檢舉、交易爭議、詐騙投訴、對處置的申訴。
+    - 每封板友來信都要有下落：已回覆 / 已處置 / 待辦。待辦的寫進 `pending_actions`，別留在腦子裡。
+    - 更新 `inbox_watermark` 為本次讀到的最大編號。
+    - **實例 (2026/07/14 踩到)**：emilyang 06/12 的爭議信、Msnbc 02/08 的詐騙投訴 (對方收 120 元運費後刪文失聯)，各被埋 1 個月與 5 個月，直到當事人跑到公告底下推文催才被發現。**兩封都是實質傷害，都躺在信箱裡沒人看**。
 
 ## 通用違規規則 (無板規時的判定基準，有板規則兩者併用)
 
@@ -209,6 +219,7 @@
 | `records/` 不存在 | 用 Write 建立後再寫。 |
 | `bucket` 回 `NO_SUCH_USER` | **多半是 `reason` 太長，不是帳號不存在**。先 `get_user(id)` 確認帳號在，再把理由縮到 20 字內重送。 |
 | `get_post(search_list=...)` 報 `'>' not supported between 'NoneType' and 'int'` | 少傳 `index`。要先 `get_newest_index(search_list=...)` 取編號，再帶進 `get_post`。 |
+| 信箱找不到某人的來信 | **別信搜尋**。信箱的 `search_list`(AUTHOR/KEYWORD) 是壞的，一律回 `0`(拿確實寄過信的 ID 實測過)。只能 `get_mail` 逐封讀。看板的 `search_list` 正常，只有信箱壞。 |
 | 發長文 (板規全文等) | PTT 可接受 30KB+ 單篇，不必預先拆。真的失敗再分篇。 |
 | 要設定置底文 | **MCP 沒有工具**。只能請板主自行在 PTT 介面設定，並在紀錄檔留 `manual_todo_for_moderator`。 |
 
