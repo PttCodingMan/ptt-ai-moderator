@@ -1,0 +1,7 @@
+# 巡邏輸出含實名 PTT 帳號與違規判定，只留在本機、不進版控。
+records/
+drafts/
+
+# OS / 編輯器
+.DS_Store
+.idea/
