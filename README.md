@@ -23,7 +23,7 @@
 
 ```bash
 claude mcp add PTT -s user -e PTT_ID=你的帳號 -e PTT_PW=你的密碼 -- \
-  podman run -i --rm -e PTT_ID -e PTT_PW ghcr.io/pyptt/ptt_mcp_server:test
+  podman run -i --rm -e PTT_ID -e PTT_PW ghcr.io/pyptt/ptt_mcp_server:latest
 ```
 
 註冊後**重啟 Claude Code**。
@@ -45,7 +45,7 @@ claude mcp add PTT -s user -e PTT_ID=你的帳號 -e PTT_PW=你的密碼 -- \
 ### 方式 B：Clone 整個專案
 
 ```bash
-git clone git@github.com:PttCodingMan/PTT-ai-police.git && cd PTT-ai-police
+git clone https://github.com/PttCodingMan/ptt-ai-moderator.git && cd ptt-ai-moderator
 ```
 
 在此目錄開 Claude Code，`CLAUDE.md` 會自動載入，接著輸入「巡 <板名>」即可開始。
