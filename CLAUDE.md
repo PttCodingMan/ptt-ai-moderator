@@ -19,9 +19,14 @@
 - **判例(`precedents`)可能有錯**。它是滾動彙總，錯的判例會讓後續巡邏「越判越一致地錯」。發現誤判要立刻回頭改判例 (見〈誤判的處理〉)。
 - PTT 同帳號單一連線，巡邏期間別開其它 PTT session。
 
-## 紀錄檔 `records/<板名>.json`
+## 紀錄檔 `records/<板名>.json` + `records/<板名>-scans.json`
 
-每板一檔，持久化增量狀態。格式：
+每板兩檔：**活狀態**(每次巡邏都讀) 與**歷次巡邏明細**(只在翻舊案時讀)。
+
+拆開的理由：`scans` 佔單檔 77%、且每週單調成長，卻每次巡邏步驟 1 都被整份載進 context——而它的可用結論早已由 `precedents` 滾動彙總，巡邏時根本用不到原始明細。實測 give.json 172 KB 中 `scans` 佔 64 KB(compact)，等於每次巡邏開頭固定燒掉約 50k tokens 讀用不到的東西。
+新板可以先只有一檔；`<板名>.json` 超過 30 KB 就把 `scans` 搬出去。
+
+`records/<板名>.json` (活狀態) 格式：
 
 ```json
 {
@@ -49,7 +54,15 @@
     "users": [
       {"id": "帳號", "warned_at": "警告日", "reason": "事由(板規條款)", "last_checked": "本次核對日", "status": "已改善/再犯情形", "escalation": "再犯→水桶等升級標準"}
     ]
-  },
+  }
+}
+```
+
+`records/<板名>-scans.json` (歷次巡邏明細) 格式：
+
+```json
+{
+  "board": "<板名>",
   "scans": [
     {
       "scanned_at": "2026/07/02",
@@ -70,10 +83,11 @@
 
 `scans` 最新的放最前面。`records/` 不存在就用 Write 建立。
 `misjudged` 只在有誤判時才出現；誤判**不計入** `violation_count`。
+**翻舊案不要用 Read 整檔載入**——用 `python3 -c` 或 `grep` 取出需要的那幾筆再看。整份 `-scans.json` 進 context 就是拆檔想避免的事。
 
 ## 巡邏步驟
 
-1. **讀紀錄** `records/<板名>.json`：取 `watermark`、`inbox_watermark`、`rules`、`moderators`、`precedents`、`watch_list`、`pending_actions`。不存在就新建 (各水位視為空)。
+1. **讀紀錄** `records/<板名>.json`：取 `watermark`、`inbox_watermark`、`rules`、`moderators`、`precedents`、`watch_list`、`pending_actions`。不存在就新建 (各水位視為空)。**只讀這一檔，不要讀 `-scans.json`**——巡邏用得到的結論都在 `precedents`。
 2. **登入並確認板主身分** `mcp__PTT__login()` (無參數)。失敗就停、回報。登入帳號即註冊 MCP 用的 `PTT_ID` (不確定就問使用者)。**先對照該板 `moderators`** (紀錄檔已存就直接用；否則呼叫 `get_board_info(board)` 取得) 確認登入帳號在名單內：
    - 在名單 → 可在授權後執行處置。
    - 不在名單 → **只產報告、全程不做任何寫入** (刪文/推文/水桶/發文都不做)，並在報告註明「登入帳號非本板板主，僅供板主參考」。
@@ -106,12 +120,19 @@
    - 違規總表：# index｜標題｜作者｜違規類型｜嚴重｜條款。
    - 重點說明：逐條展開較嚴重者的證據與建議。正常文只給數量、不逐列。
    - **建議處置若低於板規明定罰則，必須講出來**。格式：「板規 X-X 明定為 <罰則>，我建議 <較輕處置>，理由是 …」。板主有從輕的裁量權，但**他必須知道自己正在從輕**——不能讓他以為你的建議就是板規。反之若從重亦然。
-9. **更新紀錄**：`watermark` 更新為**最新一篇存活文**的 `last_time/last_aid` (`last_index` 記其 index)；若 index=N 那篇已自刪 (`post_status` 非 `EXISTS`、無 time/aid)，往回取第一篇存活文。本次 scan append 到 `scans` 最前面。
+9. **更新紀錄**：`watermark` 更新為**最新一篇存活文**的 `last_time/last_aid` (`last_index` 記其 index)；若 index=N 那篇已自刪 (`post_status` 非 `EXISTS`、無 time/aid)，往回取第一篇存活文。本次 scan append 到 **`records/<板名>-scans.json`** 的 `scans` 最前面 (用 `python3` 讀進來插入再寫回，別把整檔 Read 進 context)。
    **更新 `precedents`**：本次每筆違規歸入對應 `rulings[].pattern` → `count += 1`、補進 `examples`(留最新幾個即可)；新型違規新增一筆 ruling。反覆出現或處於灰色地帶者，加/更新 `rule_revision_candidates`。
    **更新 `watch_list`**：本次凡送出站內信/正式警告者，新增或更新一筆 (含 `warned_at`/`reason`/`escalation`)；本次有核對到的舊名單更新 `last_checked`/`status`。寫回檔案。
 10. **清信箱 (板面巡完後必做，不可省)**：板友的**檢舉信與交易爭議信只會寄到信箱，不會出現在板面**。只巡板面 = 這些信永遠沉底。
     - `get_newest_index(index_type="MAIL")` → `M`。從 `M` 往回逐封 `get_mail(index=i)`，讀到 `inbox_watermark` 記的編號為止。
-    - ⚠️ **信箱的 `search_list` 搜尋是壞的**：拿確實寄過信的 ID 去 `[["AUTHOR", id]]` 搜也回 `0`。**只能逐封讀，不能靠搜尋**。信箱編號是時間序，可先探點 (讀 index M/2 看日期) 決定往回掃多少。
+    - 信箱編號是時間序，可先探點 (讀 index M/2 看日期) 決定往回掃多少。
+    - **要追「某人寄過哪些信」時可用作者搜尋** (2026/07/21 實測已修復)：
+      ```
+      get_mail(index=1, search_list=[["AUTHOR", id]])   # index 是搜尋結果內的序號，1 = 最舊
+      get_mail(index=2, search_list=[["AUTHOR", id]])   # 往上遞增讀完
+      ```
+      ⚠️ **但 `get_newest_index(index_type="MAIL", search_list=...)` 仍回 `0`**，拿不到結果總數 → 只能從 1 往上遞增到讀取失敗為止。看板的 `get_newest_index(search_list=...)` 正常，只有信箱這一半還壞著。
+    - **增量清信箱仍要逐封讀**：作者搜尋只能查「已知的人」，而清信箱的目的正是找出「還不知道有誰寄了信」。搜尋是追查工具，不是巡檢工具。
     - 信箱裡多數是**板主自己寄出的備份**，跳過。要處理的是**板友寄來**的：檢舉、交易爭議、詐騙投訴、對處置的申訴。
     - 每封板友來信都要有下落：已回覆 / 已處置 / 待辦。待辦的寫進 `pending_actions`，別留在腦子裡。
     - 更新 `inbox_watermark` 為本次讀到的最大編號。
@@ -127,7 +148,7 @@
 
 ## 判例累積與板規修訂
 
-原始判決逐筆留在 `scans[].violations[]`，不會清除；`precedents` 是它的**滾動彙總**，讓判斷越用越一致、也當修規依據。
+原始判決逐筆留在 `<板名>-scans.json` 的 `scans[].violations[]`，不會清除；`precedents` 是它的**滾動彙總**，讓判斷越用越一致、也當修規依據。**巡邏時只讀彙總，不讀原始明細**——這正是兩者分檔的理由。
 
 - **`rulings`**：同型違規 → 慣用嚴重度＋處置＋累計次數＋近例 aid。巡邏時 (步驟 7) 先讀，新案比照歷史裁量，避免今天刪、明天放的雙標；要偏離就在報告說明理由。
 - **`rule_revision_candidates`**：反覆違規或規則講不清的灰色地帶 (例：新增條款後仍屢犯、模板欄位常漏填)，累積成給板主的板規/發文模板修訂建議，附出現次數佐證。
@@ -192,11 +213,17 @@
 | 動作 | 工具 | 備註 |
 | --- | --- | --- |
 | 刪文 | `del_post(board, aid=...)` | 用 aid 定位避免 index 位移；不可逆 |
+| 刪文＋劣退(惡退) | `del_post(board, aid=..., bad_post_type=...)` | **僅板主刪「他人」文章時可用**，會對作者記一支退文。分類四選一：`AD`(廣告)／`BAD_LANGUAGE`(不當用辭)／`PERSONAL_ATTACK`(人身攻擊)／`OTHER`(其他)。**只有 `OTHER` 才傳 `bad_post_reason`**(≤50 bytes Big5)，其餘分類傳了會錯。不傳 `bad_post_type` = 單純刪文不記劣退。刪自己的文一律不傳 |
 | 箭頭/推/噓提醒 | `comment(board, aid, comment_type="ARROW", content=...)` | 逐篇送出，避免 `NO_FAST_COMMENT` 間隔過短。內容 ≤ 30 全形字 |
 | 水桶(禁言) | `bucket(board, ptt_id, bucket_days, reason)` | **`reason` 要短 (≤ 20 全形字)**。太長會回 `NO_SUCH_USER`「找不到使用者」——**錯誤訊息會騙人**，帳號其實存在 |
 | 站內信 | `mail(ptt_id, title, content)` | |
 
-**不可逆動作 (刪文/水桶) 的參數若使用者沒指定 (如水桶天數)，先用 AskUserQuestion 確認**，不要自己填。使用者說「全做」是授權清單上的動作，不是授權你發明參數。
+**刪文要不要記劣退？** 劣退會留在作者的個人檔案裡、跨看板可見，比刪文本身更重。判準：
+- **不記劣退**（單純刪文）：格式類、規則不清、初犯、非惡意（亂碼、空標題、範本沒刪、揭露不足）。這些人只是不會用，不是來鬧的。
+- **記劣退**：明知故犯且對他人造成實害——廣告業配(`AD`)、人身攻擊歧視(`PERSONAL_ATTACK`)、詐騙/騙個資/收錢不寄(`OTHER`)、盜版與管制品(`OTHER`)。
+- 猶豫時不記。劣退是給「這個人不該再來」的訊號，不是給「這篇文沒寫好」的。
+
+**不可逆動作 (刪文/劣退/水桶) 的參數若使用者沒指定 (如水桶天數、劣退分類)，先用 AskUserQuestion 確認**，不要自己填。使用者說「全做」是授權清單上的動作，不是授權你發明參數。
 
 處置後把每篇 `violations[].action` 改成「已刪文(日期) / 已板主箭頭推文提醒(日期)」，並更新該 scan 的 `note`。
 
@@ -204,6 +231,7 @@
 
 1. 擬草稿給使用者看，**先不發**。
 2. 取分類：`get_board_info(board, get_post_types=True)` → `post_kind_list`；`title_index` 由 1 起算，系統會自動加 `[分類]`，**標題不要自己再打一次分類**。
+   ⚠️ **標題長度**：PTT 標題實測上限約 **45 bytes (Big5)**，系統自動加的 `[公告] ` 就吃掉 7 bytes → 自己能打的只剩約 **38 bytes ≒ 19 個中文字**（中文 2 bytes、全形標點 2 bytes、半形數字/空格 1 byte）。超過會被**靜默截斷**，且截斷後的標題就是存進 PTT 的版本，事後無法只改標題。實例：2026/07/14 的公告「一元賣場的「最低結帳金額」，那筆差額去哪了」被截成「…那筆差額去」。**擬標題時先算 bytes**。
 3. 使用者確認後 `post(board, title_index, title, content)` (`sign_file` 預設 "0")。
 4. 在該 scan 的 `note` 記一行「已發布 [公告] ... (日期)」。
 
@@ -219,7 +247,7 @@
 | `records/` 不存在 | 用 Write 建立後再寫。 |
 | `bucket` 回 `NO_SUCH_USER` | **多半是 `reason` 太長，不是帳號不存在**。先 `get_user(id)` 確認帳號在，再把理由縮到 20 字內重送。 |
 | `get_post(search_list=...)` 報 `'>' not supported between 'NoneType' and 'int'` | 少傳 `index`。要先 `get_newest_index(search_list=...)` 取編號，再帶進 `get_post`。 |
-| 信箱找不到某人的來信 | **別信搜尋**。信箱的 `search_list`(AUTHOR/KEYWORD) 是壞的，一律回 `0`(拿確實寄過信的 ID 實測過)。只能 `get_mail` 逐封讀。看板的 `search_list` 正常，只有信箱壞。 |
+| 信箱找不到某人的來信 | `get_mail(index=N, search_list=[["AUTHOR", id]])` 可用 (2026/07/21 修復)，`index` 是搜尋結果內的序號，從 1 (最舊) 往上遞增。但 `get_newest_index(index_type="MAIL", search_list=...)` **仍回 `0`**，拿不到總數，只能讀到失敗為止。 |
 | 發長文 (板規全文等) | PTT 可接受 30KB+ 單篇，不必預先拆。真的失敗再分篇。 |
 | 要設定置底文 | **MCP 沒有工具**。只能請板主自行在 PTT 介面設定，並在紀錄檔留 `manual_todo_for_moderator`。 |
 
