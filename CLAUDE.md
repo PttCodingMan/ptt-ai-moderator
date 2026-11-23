@@ -83,6 +83,8 @@
 
 `records/<板名>-mails.json` (板主寄出信件之全文備份)：寄信一律 `backup=False`，內容落此檔，**不要留在信箱**。信箱是 PTT 的暫存空間，不是版本控制——留著會累積、會滿、編號還會因刪信而位移。判例與 `watch_list` 引用信件時指向本檔的 `sent_at` + `to`，不要寫信箱編號。
 
+`records/<板名>-evidence.json` (需長期保存之蒐證)：營利、多帳號等要等「下次出現」才處置的案子，證據放這裡，`watch_list` 該人以 `evidence_ref` 指向。**短網址會失效**，蒐證當下就要展開並存下完整 URL（含分潤參數）、AID、IP、登入時間。
+
 `scans` 最新的放最前面。`records/` 不存在就用 Write 建立。
 `misjudged` 只在有誤判時才出現；誤判**不計入** `violation_count`。
 **翻舊案不要用 Read 整檔載入**——用 `python3 -c` 或 `grep` 取出需要的那幾筆再看。整份 `-scans.json` 進 context 就是拆檔想避免的事。
